@@ -101,7 +101,7 @@ impl<T> AppendOnlyVec<T> {
             }
         }
         unsafe {
-            *(ptr.add(offset)) = val;
+            (ptr.add(offset)).write(val);
         }
 
         // Now we need to increase the size of the vec, so it can get read.
