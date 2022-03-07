@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize};
 pub struct AppendOnlyVec<T> {
     count: AtomicUsize,
     reserved: AtomicUsize,
-    data: [AtomicPtr<T>; BITS - 1],
+    data: [AtomicPtr<T>; BITS - 1 - 3],
 }
 
 unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
@@ -53,11 +53,34 @@ const BITS: usize = std::mem::size_of::<usize>() * 8;
 // (second return value)
 //
 // The ith data array holds 1<<i values.
-fn indices(i: usize) -> (u32, usize) {
-    let i = i + 1;
+const fn indices(i: usize) -> (u32, usize) {
+    let i = i + 8;
     let bin = BITS as u32 - 1 - i.leading_zeros();
-    let offset = i - (1 << bin);
+    let bin = bin - 3;
+    let offset = i - bin_size(bin);
     (bin, offset)
+}
+const fn bin_size(array: u32) -> usize {
+    (1 << 3) << array
+}
+
+#[test]
+fn test_indices() {
+    for i in 0..32 {
+        println!("{:3}: {} {}", i, indices(i).0, indices(i).1);
+    }
+    let mut array = 0;
+    let mut offset = 0;
+    let mut index = 0;
+    while index < 1000 {
+        index += 1;
+        offset += 1;
+        if offset >= bin_size(array) {
+            offset = 0;
+            array += 1;
+        }
+        assert_eq!(indices(index), (array, offset));
+    }
 }
 
 impl<T> AppendOnlyVec<T> {
@@ -71,8 +94,7 @@ impl<T> AppendOnlyVec<T> {
     }
 
     fn layout(&self, array: u32) -> std::alloc::Layout {
-        let n = if array == 0 { 2 } else { 1 << array };
-        std::alloc::Layout::array::<T>(n).unwrap()
+        std::alloc::Layout::array::<T>(bin_size(array)).unwrap()
     }
     /// Append an element to the array
     ///
@@ -202,9 +224,6 @@ impl<T> AppendOnlyVec<T> {
                 AtomicPtr::new(std::ptr::null_mut()),
                 AtomicPtr::new(std::ptr::null_mut()),
                 AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
             ],
         }
     }
@@ -271,18 +290,6 @@ impl<T> Drop for AppendOnlyVec<T> {
             }
         }
     }
-}
-
-#[test]
-fn test_indices() {
-    assert_eq!(indices(0), (0, 0));
-    assert_eq!(indices(1), (1, 0));
-    assert_eq!(indices(2), (1, 1));
-    assert_eq!(indices(3), (2, 0));
-    assert_eq!(indices(4), (2, 1));
-    assert_eq!(indices(5), (2, 2));
-    assert_eq!(indices(6), (2, 3));
-    assert_eq!(indices(7), (3, 0));
 }
 
 #[test]

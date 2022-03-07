@@ -10,7 +10,6 @@ edition = "2021"
 [dev-dependencies]
 
 scaling = "0.1.3"
-rand = "0.8"
 parking_lot = "0.12"
 
 [[bench]]
