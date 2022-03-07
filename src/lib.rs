@@ -89,7 +89,6 @@ impl<T> AppendOnlyVec<T> {
                     ptr = p; // Someone allocated this already.
                 }
             }
-            std::hint::spin_loop();
         }
         unsafe {
             *(ptr.add(offset)) = val;
@@ -103,7 +102,12 @@ impl<T> AppendOnlyVec<T> {
         {
             // This means that someone else *started* pushing before we started,
             // but hasn't yet finished.  We have to wait for them to finish
-            // pushing before we can update the .
+            // pushing before we can update the count.  Note that using a
+            // spinloop here isn't really ideal, but except when allocating a
+            // new array, the window between reserving space and using it is
+            // pretty small, so contention will hopefully be rare, and having a
+            // context switch during that interval will hopefully be vanishingly
+            // unlikely.
             std::hint::spin_loop();
         }
         idx
