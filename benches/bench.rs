@@ -1,5 +1,28 @@
+use std::{sync::RwLock, ops::Index};
+
 use append_only_vec::AppendOnlyVec;
 use scaling::{bench, bench_scaling_gen};
+
+struct RwVec<T> {
+    data: RwLock<Vec<T>>,
+}
+
+impl<T: Clone> RwVec<T> {
+    fn new() -> Self {
+        RwVec {
+            data: RwLock::new(Vec::new())
+        }
+    }
+    fn push(&self, val: T) {
+        self.data.write().unwrap().push(val)
+    }
+    fn get(&self, index: usize) -> T {
+        self.data.read().unwrap().index(index).clone()
+    }
+    fn len(&self) -> usize {
+        self.data.read().unwrap().len()
+    }
+}
 
 fn main() {
     {
@@ -96,6 +119,26 @@ fn main() {
             )
         );
         println!(
+            "RWV: loop sum: {}",
+            bench_scaling_gen(
+                |n: usize| {
+                    let vec = RwVec::new();
+                    for i in 0..n {
+                        vec.push(i);
+                    }
+                    vec
+                },
+                |vec| {
+                    let mut sum = 0;
+                    for i in 0..vec.len() {
+                        sum += vec.get(i);
+                    }
+                    sum
+                },
+                min_n
+            )
+        );
+        println!(
             "Vec: loop sum: {}",
             bench_scaling_gen(
                 |n: usize| {
@@ -130,6 +173,27 @@ fn main() {
                     let n = vec.len();
                     for i in 0..n {
                         sum += vec[n-1-i];
+                    }
+                    sum
+                },
+                min_n
+            )
+        );
+        println!(
+            "RWV: back loop sum: {}",
+            bench_scaling_gen(
+                |n: usize| {
+                    let vec = RwVec::new();
+                    for i in 0..n {
+                        vec.push(i);
+                    }
+                    vec
+                },
+                |vec| {
+                    let mut sum = 0;
+                    let n = vec.len();
+                    for i in 0..n {
+                        sum += vec.get(n-1-i);
                     }
                     sum
                 },
