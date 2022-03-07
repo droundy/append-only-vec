@@ -69,6 +69,11 @@ impl<T> AppendOnlyVec<T> {
     pub fn len(&self) -> usize {
         self.count.load(Ordering::Acquire)
     }
+
+    fn layout(&self, array: u32) -> std::alloc::Layout {
+        let n = if array == 0 { 2 } else { 1 << array };
+        std::alloc::Layout::array::<T>(n).unwrap()
+    }
     /// Append an element to the array
     ///
     /// This is notable in that it doesn't require a `&mut self`, because it
@@ -84,8 +89,7 @@ impl<T> AppendOnlyVec<T> {
         let mut ptr = self.data[array as usize].load(Ordering::Relaxed);
         if ptr.is_null() {
             // The first array has size 2, and after that they are more regular.
-            let n = if array == 0 { 2 } else { 1 << array };
-            let layout = std::alloc::Layout::array::<T>(n).unwrap();
+            let layout = self.layout(array);
             ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
             // We use a relaxed compare_exchange for the same reason as the
             // Relaxed load above.  We aren't accessing any data that is stored
@@ -235,6 +239,34 @@ impl<T> Index<usize> for AppendOnlyVec<T> {
         // `self.push`.
         let ptr = self.data[array as usize].load(Ordering::Relaxed);
         unsafe { &*ptr.add(offset) }
+    }
+}
+
+impl<T> Drop for AppendOnlyVec<T> {
+    fn drop(&mut self) {
+        // First we'll drop all the `T` in a slightly sloppy way.  FIXME this
+        // could be optimized to avoid reloading the `ptr`.
+        for idx in 0..self.len() {
+            let (array, offset) = indices(idx);
+            // We use a Relaxed load of the pointer, because the loop above (which
+            // ends before `self.len()`) should ensure that the data we want is
+            // already visible, since it Acquired `self.count` which synchronizes
+            // with the write in `self.push`.
+            let ptr = self.data[array as usize].load(Ordering::Relaxed);
+            unsafe {
+                std::ptr::drop_in_place(ptr.add(offset));
+            }
+        }
+        // Now we will free all the arrays.
+        for array in 0..self.data.len() as u32 {
+            // This load is relaxed because no other thread can have a reference
+            // to Self because we have a &mut self.
+            let ptr = self.data[array as usize].load(Ordering::Relaxed);
+            if !ptr.is_null() {
+                let layout = self.layout(array);
+                unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+            }
+        }
     }
 }
 
