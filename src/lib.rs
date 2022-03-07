@@ -17,21 +17,21 @@
 //!
 //! ```
 //! use append_only_vec::AppendOnlyVec;
-//! static v: AppendOnlyVec<String> = AppendOnlyVec::<String>::new();
+//! static V: AppendOnlyVec<String> = AppendOnlyVec::<String>::new();
 //! let mut threads = Vec::new();
 //! for thread_num in 0..10 {
 //!     threads.push(std::thread::spawn(move || {
 //!          for n in 0..100 {
 //!               let s = format!("thread {} says {}", thread_num, n);
-//!               let which = v.push(s.clone());
-//!               assert_eq!(&v[which], &s);
+//!               let which = V.push(s.clone());
+//!               assert_eq!(&V[which], &s);
 //!          }
 //!     }));
 //! }
 //! for t in threads {
 //!    t.join();
 //! }
-//! assert_eq!(v.len(), 1000);
+//! assert_eq!(V.len(), 1000);
 //! ```
 
 use std::ops::Index;
@@ -83,21 +83,22 @@ impl<T> AppendOnlyVec<T> {
         let (array, offset) = indices(idx);
 
         // First we get the pointer to the relevant array.  This requires
-        // allocating it atomically if it is null.  We use a relaxed load
-        // because we don't read any data that exists behind the pointer, so no
-        // memory synchronization is required.
-        let mut ptr = self.data[array as usize].load(Ordering::Relaxed);
+        // allocating it atomically if it is null.  We use an Acquire load
+        // because although we don't read any data that exists behind the
+        // pointer, the data may not be correctly writeable if we just allocated
+        // the pointer?
+        let mut ptr = self.data[array as usize].load(Ordering::Acquire);
         if ptr.is_null() {
             // The first array has size 2, and after that they are more regular.
             let layout = self.layout(array);
             ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
-            // We use a relaxed compare_exchange for the same reason as the
-            // Relaxed load above.  We aren't accessing any data that is stored
-            // behind the pointer.
+            // We use a Release compare_exchange to ensure that the allocated
+            // array is valid to write to by any other thread that might be
+            // pushing.
             match self.data[array as usize].compare_exchange(
                 std::ptr::null_mut(),
                 ptr,
-                Ordering::Relaxed,
+                Ordering::Release,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
