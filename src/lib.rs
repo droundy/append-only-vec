@@ -265,6 +265,8 @@ impl<T> Drop for AppendOnlyVec<T> {
             if !ptr.is_null() {
                 let layout = self.layout(array);
                 unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+            } else {
+                break;
             }
         }
     }
