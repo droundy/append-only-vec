@@ -48,51 +48,16 @@ unsafe impl<T: Sync> Sync for AppendOnlyVec<T> {}
 
 const BITS: usize = std::mem::size_of::<usize>() * 8;
 
+// This takes an index into a vec, and determines which data array will hold it
+// (the first return value), and what the index will be into that data array
+// (second return value)
+//
+// The ith data array holds 1<<i values.
 fn indices(i: usize) -> (u32, usize) {
-    let i = i + 1; //
+    let i = i + 1;
     let bin = BITS as u32 - 1 - i.leading_zeros();
     let offset = i - (1 << bin);
     (bin, offset)
-}
-
-#[test]
-fn test_indices() {
-    assert_eq!(indices(0), (0, 0));
-    assert_eq!(indices(1), (1, 0));
-    assert_eq!(indices(2), (1, 1));
-    assert_eq!(indices(3), (2, 0));
-    assert_eq!(indices(4), (2, 1));
-    assert_eq!(indices(5), (2, 2));
-    assert_eq!(indices(6), (2, 3));
-    assert_eq!(indices(7), (3, 0));
-}
-
-#[test]
-fn test_pushing_and_indexing() {
-    let v = AppendOnlyVec::<usize>::new();
-
-    for n in 0..50 {
-        v.push(n);
-        assert_eq!(v.len(), n + 1);
-        for i in 0..(n + 1) {
-            assert_eq!(v[i], i);
-        }
-    }
-
-    let vec: Vec<usize> = v.iter().copied().collect();
-    let ve2: Vec<usize> = (0..50).collect();
-    assert_eq!(vec, ve2);
-}
-
-impl<T> Index<usize> for AppendOnlyVec<T> {
-    type Output = T;
-
-    fn index(&self, idx: usize) -> &Self::Output {
-        assert!(idx < self.len()); // this includes the required ordering memory barrier
-        let (array, offset) = indices(idx);
-        let ptr = self.data[array as usize].load(Ordering::Acquire);
-        unsafe { &*ptr.add(offset) }
-    }
 }
 
 impl<T> AppendOnlyVec<T> {
@@ -229,4 +194,44 @@ impl<T> AppendOnlyVec<T> {
             ],
         }
     }
+}
+
+impl<T> Index<usize> for AppendOnlyVec<T> {
+    type Output = T;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        assert!(idx < self.len()); // this includes the required ordering memory barrier
+        let (array, offset) = indices(idx);
+        let ptr = self.data[array as usize].load(Ordering::Acquire);
+        unsafe { &*ptr.add(offset) }
+    }
+}
+
+#[test]
+fn test_indices() {
+    assert_eq!(indices(0), (0, 0));
+    assert_eq!(indices(1), (1, 0));
+    assert_eq!(indices(2), (1, 1));
+    assert_eq!(indices(3), (2, 0));
+    assert_eq!(indices(4), (2, 1));
+    assert_eq!(indices(5), (2, 2));
+    assert_eq!(indices(6), (2, 3));
+    assert_eq!(indices(7), (3, 0));
+}
+
+#[test]
+fn test_pushing_and_indexing() {
+    let v = AppendOnlyVec::<usize>::new();
+
+    for n in 0..50 {
+        v.push(n);
+        assert_eq!(v.len(), n + 1);
+        for i in 0..(n + 1) {
+            assert_eq!(v[i], i);
+        }
+    }
+
+    let vec: Vec<usize> = v.iter().copied().collect();
+    let ve2: Vec<usize> = (0..50).collect();
+    assert_eq!(vec, ve2);
 }
