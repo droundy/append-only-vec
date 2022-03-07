@@ -1,3 +1,39 @@
+//! AppendOnlyVec
+//!
+//! This is a pretty simple type, which is a vector that you can push into, but
+//! cannot modify the elements of.  The data structure never moves an element
+//! once allocated, so you can push to the vec even while holding references to
+//! elements that have already been pushed.
+//!
+//! ### Scaling
+//!
+//! 1. Accessing an element is O(1), but slightly more expensive than for a
+//!    standard `Vec`.
+//!
+//! 2. Pushing a new element amortizes to O(1), but may require allocation of a
+//!    new chunk.
+//!
+//! ### Example
+//!
+//! ```
+//! use append_only_vec::AppendOnlyVec;
+//! static v: AppendOnlyVec<String> = AppendOnlyVec::<String>::new();
+//! let mut threads = Vec::new();
+//! for thread_num in 0..10 {
+//!     threads.push(std::thread::spawn(move || {
+//!          for n in 0..100 {
+//!               let s = format!("thread {} says {}", thread_num, n);
+//!               let which = v.push(s.clone());
+//!               assert_eq!(&v[which], &s);
+//!          }
+//!     }));
+//! }
+//! for t in threads {
+//!    t.join();
+//! }
+//! assert_eq!(v.len(), 1000);
+//! ```
+
 use std::ops::Index;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
@@ -6,6 +42,9 @@ pub struct AppendOnlyVec<T> {
     reserved: AtomicUsize,
     data: [AtomicPtr<T>; BITS - 1],
 }
+
+unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
+unsafe impl<T: Sync> Sync for AppendOnlyVec<T> {}
 
 const BITS: usize = std::mem::size_of::<usize>() * 8;
 
@@ -57,12 +96,18 @@ impl<T> Index<usize> for AppendOnlyVec<T> {
 }
 
 impl<T> AppendOnlyVec<T> {
-    pub fn iter(&self) -> impl Iterator<Item=&T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         (0..self.len()).map(|i| &self[i])
     }
+    /// Find the length of the array.
+    #[inline]
     pub fn len(&self) -> usize {
         self.count.load(Ordering::Acquire)
     }
+    /// Append an element to the array
+    ///
+    /// This is notable in that it doesn't require a `&mut self`, because it
+    /// does appropriate atomic synchronization.
     pub fn push(&self, val: T) -> usize {
         let idx = self.reserved.fetch_add(1, Ordering::Relaxed);
         let (array, offset) = indices(idx);
@@ -112,6 +157,7 @@ impl<T> AppendOnlyVec<T> {
         }
         idx
     }
+    /// Allocate a new empty array
     pub const fn new() -> Self {
         AppendOnlyVec {
             count: AtomicUsize::new(0),
