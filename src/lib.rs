@@ -62,7 +62,7 @@ fn indices(i: usize) -> (u32, usize) {
 
 impl<T> AppendOnlyVec<T> {
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        (0..self.len()).map(|i| &self[i])
+        (0..self.len()).map(|i| unsafe { self.get_unchecked(i) })
     }
     /// Find the length of the array.
     #[inline]
@@ -78,17 +78,22 @@ impl<T> AppendOnlyVec<T> {
         let (array, offset) = indices(idx);
 
         // First we get the pointer to the relevant array.  This requires
-        // allocating it atomically if it is null.
-        let mut ptr = self.data[array as usize].load(Ordering::Acquire);
+        // allocating it atomically if it is null.  We use a relaxed load
+        // because we don't read any data that exists behind the pointer, so no
+        // memory synchronization is required.
+        let mut ptr = self.data[array as usize].load(Ordering::Relaxed);
         if ptr.is_null() {
             // The first array has size 2, and after that they are more regular.
             let n = if array == 0 { 2 } else { 1 << array };
             let layout = std::alloc::Layout::array::<T>(n).unwrap();
             ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
+            // We use a relaxed compare_exchange for the same reason as the
+            // Relaxed load above.  We aren't accessing any data that is stored
+            // behind the pointer.
             match self.data[array as usize].compare_exchange(
                 std::ptr::null_mut(),
                 ptr,
-                Ordering::AcqRel,
+                Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
@@ -104,7 +109,11 @@ impl<T> AppendOnlyVec<T> {
             (ptr.add(offset)).write(val);
         }
 
-        // Now we need to increase the size of the vec, so it can get read.
+        // Now we need to increase the size of the vec, so it can get read.  We
+        // use Release upon success, to ensure that the value which we wrote is
+        // visible to any thread that has confirmed that the count is big enough
+        // to read that element.  In case of failure, we can be relaxed, since
+        // we don't do anything with the result other than try again.
         while self
             .count
             .compare_exchange(idx, idx + 1, Ordering::Release, Ordering::Relaxed)
@@ -194,6 +203,24 @@ impl<T> AppendOnlyVec<T> {
             ],
         }
     }
+
+    /// Index the vec without checking the bounds.
+    ///
+    /// To use this correctly, you *must* first ensure that the `idx <
+    /// self.len()`.  This not only prevents overwriting the bounds, but also
+    /// creates the memory barriers to ensure that the data is visible to the
+    /// current thread.  In single-threaded code, however, it is not needed to
+    /// call `self.len()` explicitly (if e.g. you have counted the number of
+    /// elements pushed).
+    unsafe fn get_unchecked(&self, idx: usize) -> &T {
+        let (array, offset) = indices(idx);
+        // We use a Relaxed load of the pointer, because the length check (which
+        // was supposed to be performed) should ensure that the data we want is
+        // already visible, since it Acquired `self.count` which synchronizes
+        // with the write in `self.push`.
+        let ptr = self.data[array as usize].load(Ordering::Relaxed);
+        &*ptr.add(offset)
+    }
 }
 
 impl<T> Index<usize> for AppendOnlyVec<T> {
@@ -202,7 +229,11 @@ impl<T> Index<usize> for AppendOnlyVec<T> {
     fn index(&self, idx: usize) -> &Self::Output {
         assert!(idx < self.len()); // this includes the required ordering memory barrier
         let (array, offset) = indices(idx);
-        let ptr = self.data[array as usize].load(Ordering::Acquire);
+        // We use a Relaxed load of the pointer, because the length check above
+        // will ensure that the data we want is already visible, since it
+        // Acquired `self.count` which synchronizes with the write in
+        // `self.push`.
+        let ptr = self.data[array as usize].load(Ordering::Relaxed);
         unsafe { &*ptr.add(offset) }
     }
 }
