@@ -308,3 +308,26 @@ fn test_pushing_and_indexing() {
     let ve2: Vec<usize> = (0..50).collect();
     assert_eq!(vec, ve2);
 }
+
+#[test]
+fn test_parallel_pushing() {
+    use std::sync::Arc;
+    let v = Arc::new(AppendOnlyVec::<u64>::new());
+    let mut threads = Vec::new();
+    const N: u64 = 100;
+    for thread_num in 0..N {
+        let v = v.clone();
+        threads.push(std::thread::spawn(move || {
+            let which1 = v.push(thread_num);
+            let which2 = v.push(thread_num);
+            assert_eq!(v[which1 as usize], thread_num);
+            assert_eq!(v[which2 as usize], thread_num);
+        }));
+    }
+    for t in threads {
+        t.join().ok();
+    }
+    for thread_num in 0..N {
+        assert_eq!(2, v.iter().copied().filter(|&x| x == thread_num).count());
+    }
+}
