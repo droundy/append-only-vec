@@ -40,13 +40,20 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize};
 pub struct AppendOnlyVec<T> {
     count: AtomicUsize,
     reserved: AtomicUsize,
-    data: [AtomicPtr<T>; BITS - 1 - 3],
+    data: [AtomicPtr<T>; BITS_USED - 1 - 3],
 }
 
 unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
 unsafe impl<T: Sync + Send> Sync for AppendOnlyVec<T> {}
 
 const BITS: usize = std::mem::size_of::<usize>() * 8;
+
+#[cfg(target_arch = "x86_64")]
+const BITS_USED: usize = 48;
+#[cfg(all(not(target_arch = "x86_64"), target_pointer_width = "64"))]
+const BITS_USED: usize = 64;
+#[cfg(target_pointer_width = "32")]
+const BITS_USED: usize = 32;
 
 // This takes an index into a vec, and determines which data array will hold it
 // (the first return value), and what the index will be into that data array
@@ -84,6 +91,147 @@ fn test_indices() {
 }
 
 impl<T> AppendOnlyVec<T> {
+    #[cfg(target_arch = "x86_64")]
+    const EMPTY_POINTERS: [AtomicPtr<T>; BITS_USED - 1 - 3] = [
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+    ];
+    #[cfg(target_pointer_width = "32")]
+    const EMPTY_POINTERS: [AtomicPtr<T>; BITS_USED - 1 - 3] = [
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+    ];
+    #[cfg(all(not(target_arch = "x86_64"), target_pointer_width = "64"))]
+    const EMPTY_POINTERS: [AtomicPtr<T>; BITS_USED - 1 - 3] = [
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+        AtomicPtr::new(std::ptr::null_mut()),
+    ];
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         (0..self.len()).map(|i| unsafe { self.get_unchecked(i) })
     }
@@ -163,68 +311,7 @@ impl<T> AppendOnlyVec<T> {
         AppendOnlyVec {
             count: AtomicUsize::new(0),
             reserved: AtomicUsize::new(0),
-            data: [
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-                AtomicPtr::new(std::ptr::null_mut()),
-            ],
+            data: Self::EMPTY_POINTERS,
         }
     }
 
@@ -307,4 +394,27 @@ fn test_pushing_and_indexing() {
     let vec: Vec<usize> = v.iter().copied().collect();
     let ve2: Vec<usize> = (0..50).collect();
     assert_eq!(vec, ve2);
+}
+
+#[test]
+fn test_parallel_pushing() {
+    use std::sync::Arc;
+    let v = Arc::new(AppendOnlyVec::<u64>::new());
+    let mut threads = Vec::new();
+    const N: u64 = 100;
+    for thread_num in 0..N {
+        let v = v.clone();
+        threads.push(std::thread::spawn(move || {
+            let which1 = v.push(thread_num);
+            let which2 = v.push(thread_num);
+            assert_eq!(v[which1 as usize], thread_num);
+            assert_eq!(v[which2 as usize], thread_num);
+        }));
+    }
+    for t in threads {
+        t.join().ok();
+    }
+    for thread_num in 0..N {
+        assert_eq!(2, v.iter().copied().filter(|&x| x == thread_num).count());
+    }
 }

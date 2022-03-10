@@ -1,9 +1,18 @@
 [package]
 name = "append-only-vec"
 version = "0.1.1"
+authors = ["David Roundy <daveroundy@gmail.com>"]
+
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Append-only, concurrent vector"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/droundy/append-only-vec"
+
+readme = "README.md"
+categories = ["data-structures", "concurrency"]
+keywords = ["frozen", "data-structure"]
+
 
 [dependencies]
 
