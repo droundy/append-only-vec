@@ -44,7 +44,7 @@ pub struct AppendOnlyVec<T> {
 }
 
 unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
-unsafe impl<T: Sync> Sync for AppendOnlyVec<T> {}
+unsafe impl<T: Sync + Send> Sync for AppendOnlyVec<T> {}
 
 const BITS: usize = std::mem::size_of::<usize>() * 8;
 
