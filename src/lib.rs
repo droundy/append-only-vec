@@ -34,13 +34,14 @@
 //! assert_eq!(V.len(), 1000);
 //! ```
 
+use std::cell::UnsafeCell;
 use std::ops::Index;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
 pub struct AppendOnlyVec<T> {
     count: AtomicUsize,
     reserved: AtomicUsize,
-    data: [AtomicPtr<T>; BITS_USED - 1 - 3],
+    data: [UnsafeCell<*mut T>; BITS_USED - 1 - 3],
 }
 
 unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
@@ -91,8 +92,11 @@ fn test_indices() {
 }
 
 impl<T> AppendOnlyVec<T> {
-    const EMPTY: AtomicPtr<T> = AtomicPtr::new(std::ptr::null_mut());
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
+    /// Return an `Iterator` over the elements of the vec.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
+        // FIXME this could be written to be a little more efficient probably,
+        // if we made it read each pointer only once.  On the other hand, that
+        // could make a reversed iterator less efficient?
         (0..self.len()).map(|i| unsafe { self.get_unchecked(i) })
     }
     /// Find the length of the array.
@@ -111,38 +115,40 @@ impl<T> AppendOnlyVec<T> {
     pub fn push(&self, val: T) -> usize {
         let idx = self.reserved.fetch_add(1, Ordering::Relaxed);
         let (array, offset) = indices(idx);
-
-        // First we get the pointer to the relevant array.  This requires
-        // allocating it atomically if it is null.  We use an Acquire load
-        // because although we don't read any data that exists behind the
-        // pointer, the data may not be correctly writeable if we just allocated
-        // the pointer?
-        let mut ptr = self.data[array as usize].load(Ordering::Acquire);
-        if ptr.is_null() {
-            // The first array has size 2, and after that they are more regular.
-            let layout = self.layout(array);
-            ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
-            // We use a Release compare_exchange to ensure that the allocated
-            // array is valid to write to by any other thread that might be
-            // pushing.
-            match self.data[array as usize].compare_exchange(
-                std::ptr::null_mut(),
-                ptr,
-                Ordering::Release,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    // Nothing to do.
+        let ptr = if self.len() < 1 + idx - offset {
+            // We are working on a new array, which may not have been allocated...
+            if offset == 0 {
+                // It is our job to allocate the array!  The size of the array
+                // is determined in the self.layout method, which needs to be
+                // consistent with the indices function.
+                let layout = self.layout(array);
+                let ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
+                unsafe {
+                    *self.data[array as usize].get() = ptr;
                 }
-                Err(p) => {
-                    unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
-                    ptr = p; // Someone allocated this already.
+                ptr
+            } else {
+                // We need to wait for the array to be allocated.
+                while self.len() < 1 + idx - offset {
+                    std::hint::spin_loop();
                 }
+                // The Ordering::Acquire semantics of self.len() ensures that
+                // this pointer read will get the non-null pointer allocated
+                // above.
+                unsafe { *self.data[array as usize].get() }
             }
-        }
-        unsafe {
-            (ptr.add(offset)).write(val);
-        }
+        } else {
+            // The Ordering::Acquire semantics of self.len() ensures that
+            // this pointer read will get the non-null pointer allocated
+            // above.
+            unsafe { *self.data[array as usize].get() }
+        };
+
+        // The contents of this offset are guaranteed to be unused (so far)
+        // because we got the idx from our fetch_add above, and ptr is
+        // guaranteed to be valid because of the loop we used above, which used
+        // self.len() which has Ordering::Acquire semantics.
+        unsafe { (ptr.add(offset)).write(val) };
 
         // Now we need to increase the size of the vec, so it can get read.  We
         // use Release upon success, to ensure that the value which we wrote is
@@ -166,6 +172,7 @@ impl<T> AppendOnlyVec<T> {
         }
         idx
     }
+    const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(std::ptr::null_mut());
     /// Allocate a new empty array
     pub const fn new() -> Self {
         AppendOnlyVec {
@@ -187,9 +194,10 @@ impl<T> AppendOnlyVec<T> {
         let (array, offset) = indices(idx);
         // We use a Relaxed load of the pointer, because the length check (which
         // was supposed to be performed) should ensure that the data we want is
-        // already visible, since it Acquired `self.count` which synchronizes
-        // with the write in `self.push`.
-        let ptr = self.data[array as usize].load(Ordering::Relaxed);
+        // already visible, since self.len() used Ordering::Acquire on
+        // `self.count` which synchronizes with the Ordering::Release write in
+        // `self.push`.
+        let ptr = *self.data[array as usize].get();
         &*ptr.add(offset)
     }
 }
@@ -200,11 +208,11 @@ impl<T> Index<usize> for AppendOnlyVec<T> {
     fn index(&self, idx: usize) -> &Self::Output {
         assert!(idx < self.len()); // this includes the required ordering memory barrier
         let (array, offset) = indices(idx);
-        // We use a Relaxed load of the pointer, because the length check above
-        // will ensure that the data we want is already visible, since it
-        // Acquired `self.count` which synchronizes with the write in
-        // `self.push`.
-        let ptr = self.data[array as usize].load(Ordering::Relaxed);
+        // The ptr value below is safe, because the length check above will
+        // ensure that the data we want is already visible, since it used
+        // Ordering::Acquire on `self.count` which synchronizes with the
+        // Ordering::Release write in `self.push`.
+        let ptr = unsafe { *self.data[array as usize].get() };
         unsafe { &*ptr.add(offset) }
     }
 }
@@ -219,7 +227,7 @@ impl<T> Drop for AppendOnlyVec<T> {
             // ends before `self.len()`) should ensure that the data we want is
             // already visible, since it Acquired `self.count` which synchronizes
             // with the write in `self.push`.
-            let ptr = self.data[array as usize].load(Ordering::Relaxed);
+            let ptr = unsafe { *self.data[array as usize].get() };
             unsafe {
                 std::ptr::drop_in_place(ptr.add(offset));
             }
@@ -228,7 +236,7 @@ impl<T> Drop for AppendOnlyVec<T> {
         for array in 0..self.data.len() as u32 {
             // This load is relaxed because no other thread can have a reference
             // to Self because we have a &mut self.
-            let ptr = self.data[array as usize].load(Ordering::Relaxed);
+            let ptr = unsafe { *self.data[array as usize].get() };
             if !ptr.is_null() {
                 let layout = self.layout(array);
                 unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };

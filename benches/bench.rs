@@ -149,6 +149,20 @@ fn main() {
             )
         );
         println!(
+            "AOV: reversed sum: {}",
+            bench_scaling_gen(
+                |n: usize| {
+                    let vec = AppendOnlyVec::new();
+                    for i in 0..n {
+                        vec.push(i);
+                    }
+                    vec
+                },
+                |vec| { vec.iter().copied().rev().sum::<usize>() },
+                min_n
+            )
+        );
+        println!(
             "Vec: sum: {}",
             bench_scaling_gen(
                 |n: usize| {
