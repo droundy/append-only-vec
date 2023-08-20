@@ -201,7 +201,14 @@ impl<T> AppendOnlyVec<T> {
         &*ptr.add(offset)
     }
 }
-
+impl<T> std::fmt::Debug for AppendOnlyVec<T>
+where
+    T: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
 impl<T> Index<usize> for AppendOnlyVec<T> {
     type Output = T;
 
