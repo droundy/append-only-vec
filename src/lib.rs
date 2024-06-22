@@ -200,6 +200,32 @@ impl<T> AppendOnlyVec<T> {
         let ptr = *self.data[array as usize].get();
         &*ptr.add(offset)
     }
+
+    /// Convert into a standard `Vec`
+    pub fn into_vec(self) -> Vec<T> {
+        let mut vec = Vec::with_capacity(self.len());
+
+        for idx in 0..self.len() {
+            let (array, offset) = indices(idx);
+            // We use a Relaxed load of the pointer, because the loop above (which
+            // ends before `self.len()`) should ensure that the data we want is
+            // already visible, since it Acquired `self.count` which synchronizes
+            // with the write in `self.push`.
+            let ptr = unsafe { *self.data[array as usize].get() };
+
+            // Copy the element value. The copy remaining in the array must not 
+            // be used again (i.e. make sure we do not drop it)
+            let value = unsafe { ptr.add(offset).read() };
+
+            vec.push(value);
+        }
+
+        // Prevent dropping the copied-out values by marking the count as 0 before
+        // our own drop is run
+        self.count.store(0, Ordering::Relaxed);
+
+        vec
+    }
 }
 impl<T> std::fmt::Debug for AppendOnlyVec<T>
 where
@@ -254,6 +280,44 @@ impl<T> Drop for AppendOnlyVec<T> {
     }
 }
 
+/// An `Iterator` for the values contained in the `AppendOnlyVec`
+#[derive(Debug)]
+pub struct IntoIter<T>(std::vec::IntoIter<T>);
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.0.next_back()
+    }
+}
+
+impl<T> ExactSizeIterator for IntoIter<T> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl<T> IntoIterator for AppendOnlyVec<T> {
+    type Item = T;
+
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter(self.into_vec().into_iter())
+    }
+}
+
 #[test]
 fn test_pushing_and_indexing() {
     let v = AppendOnlyVec::<usize>::new();
@@ -291,5 +355,28 @@ fn test_parallel_pushing() {
     }
     for thread_num in 0..N {
         assert_eq!(2, v.iter().copied().filter(|&x| x == thread_num).count());
+    }
+}
+
+#[test]
+fn test_into_vec() {
+    struct SafeToDrop(bool);
+
+    impl Drop for SafeToDrop {
+        fn drop(&mut self) {
+            assert!(self.0);
+        }
+    }
+
+    let v = AppendOnlyVec::new();
+
+    for _ in 0..50 {
+        v.push(SafeToDrop(false));
+    }
+
+    let mut v = v.into_vec();
+
+    for i in v.iter_mut() {
+        i.0 = true;
     }
 }
