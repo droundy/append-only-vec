@@ -35,7 +35,7 @@
 //! ```
 
 use std::cell::UnsafeCell;
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 pub struct AppendOnlyVec<T> {
@@ -213,7 +213,7 @@ impl<T> AppendOnlyVec<T> {
             // with the write in `self.push`.
             let ptr = unsafe { *self.data[array as usize].get() };
 
-            // Copy the element value. The copy remaining in the array must not 
+            // Copy the element value. The copy remaining in the array must not
             // be used again (i.e. make sure we do not drop it)
             let value = unsafe { ptr.add(offset).read() };
 
@@ -235,6 +235,7 @@ where
         f.debug_list().entries(self.iter()).finish()
     }
 }
+
 impl<T> Index<usize> for AppendOnlyVec<T> {
     type Output = T;
 
@@ -247,6 +248,22 @@ impl<T> Index<usize> for AppendOnlyVec<T> {
         // Ordering::Release write in `self.push`.
         let ptr = unsafe { *self.data[array as usize].get() };
         unsafe { &*ptr.add(offset) }
+    }
+}
+
+impl<T> IndexMut<usize> for AppendOnlyVec<T> {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        assert!(idx < self.len()); // this includes the required ordering memory barrier
+        let (array, offset) = indices(idx);
+        // The ptr value below is safe, because the length check above will
+        // ensure that the data we want is already visible, since it used
+        // Ordering::Acquire on `self.count` which synchronizes with the
+        // Ordering::Release write in `self.push`.
+        let ptr = unsafe { *self.data[array as usize].get() };
+
+        // `&mut` is safe because there can be no access to data owned by
+        // `self` except via `self`, and we have `&mut` on `self`
+        unsafe { &mut *ptr.add(offset) }
     }
 }
 
@@ -378,5 +395,19 @@ fn test_into_vec() {
 
     for i in v.iter_mut() {
         i.0 = true;
+    }
+}
+
+#[test]
+fn test_push_then_index_mut() {
+    let mut v = AppendOnlyVec::<usize>::new();
+    for i in 0..1024 {
+        v.push(i);
+    }
+    for i in 0..1024 {
+        v[i] += i;
+    }
+    for i in 0..1024 {
+        assert_eq!(v[i], 2 * i);
     }
 }
