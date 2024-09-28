@@ -91,6 +91,12 @@ fn test_indices() {
     }
 }
 
+impl<T> Default for AppendOnlyVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> AppendOnlyVec<T> {
     /// Return an `Iterator` over the elements of the vec.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
