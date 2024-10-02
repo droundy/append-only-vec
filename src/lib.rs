@@ -233,6 +233,7 @@ impl<T> AppendOnlyVec<T> {
         vec
     }
 }
+
 impl<T> std::fmt::Debug for AppendOnlyVec<T>
 where
     T: std::fmt::Debug,
@@ -341,6 +342,66 @@ impl<T> IntoIterator for AppendOnlyVec<T> {
     }
 }
 
+pub struct MutableAppendOnlyVec<T>(AppendOnlyVec<T>);
+
+impl<T> MutableAppendOnlyVec<T> {
+    /// Allocate a new empty array.
+    pub fn new() -> Self {
+        MutableAppendOnlyVec(AppendOnlyVec::new())
+    }
+
+    /// Find the length of the array.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Append an element to the array and get a mutable ref to it.
+    ///
+    /// This is notable in that it doesn't require a `&mut self`, because it
+    /// does appropriate atomic synchronization.
+    pub fn push(&self, val: T) -> &mut T {
+        let idx = self.0.push(val);
+        let (array, offset) = indices(idx);
+        // We use a Relaxed load of the pointer, because the length check (which
+        // was supposed to be performed) should ensure that the data we want is
+        // already visible, since self.len() used Ordering::Acquire on
+        // `self.count` which synchronizes with the Ordering::Release write in
+        // `self.push`.
+        let ptr = unsafe { *self.0.data[array as usize].get() };
+        unsafe { &mut *ptr.add(offset) }
+    }
+
+    /// Convert into a standard `Vec`.
+    pub fn into_vec(self) -> Vec<T> {
+        self.0.into_vec()
+    }
+}
+
+impl<T> Default for MutableAppendOnlyVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> std::fmt::Debug for MutableAppendOnlyVec<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MutableAppendOnlyVec")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+impl<T> IntoIterator for MutableAppendOnlyVec<T> {
+    type Item = T;
+
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter(self.0.into_vec().into_iter())
+    }
+}
+
 #[test]
 fn test_pushing_and_indexing() {
     let v = AppendOnlyVec::<usize>::new();
@@ -413,6 +474,67 @@ fn test_push_then_index_mut() {
     for i in 0..1024 {
         v[i] += i;
     }
+    for i in 0..1024 {
+        assert_eq!(v[i], 2 * i);
+    }
+}
+
+#[test]
+fn test_mutable_parallel_pushing() {
+    use std::sync::Arc;
+    let v = Arc::new(MutableAppendOnlyVec::<u64>::new());
+    let mut threads = Vec::new();
+    const N: u64 = 100;
+    for thread_num in 0..N {
+        let v = v.clone();
+        threads.push(std::thread::spawn(move || {
+            let which1 = v.push(thread_num);
+            let which2 = v.push(thread_num);
+            assert_eq!(*which1, thread_num);
+            assert_eq!(*which2, thread_num);
+        }));
+    }
+    for t in threads {
+        t.join().unwrap();
+    }
+    let v = Arc::into_inner(v).unwrap().into_vec();
+    for thread_num in 0..N {
+        assert_eq!(2, v.iter().copied().filter(|&x| x == thread_num).count());
+    }
+}
+
+#[test]
+fn test_mutable_into_vec() {
+    struct SafeToDrop(bool);
+
+    impl Drop for SafeToDrop {
+        fn drop(&mut self) {
+            assert!(self.0);
+        }
+    }
+
+    let v = MutableAppendOnlyVec::new();
+
+    for _ in 0..50 {
+        v.push(SafeToDrop(false));
+    }
+
+    let mut v = v.into_vec();
+    assert_eq!(v.len(), 50);
+
+    for i in v.iter_mut() {
+        i.0 = true;
+    }
+}
+
+#[test]
+fn test_mutable_push_then_index_mut() {
+    let v = MutableAppendOnlyVec::<usize>::new();
+    for i in 0..1024 {
+        *v.push(i) += 1;
+    }
+
+    let v = v.into_vec();
     for i in 0..1024 {
         assert_eq!(v[i], 2 * i);
     }
