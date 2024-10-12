@@ -189,6 +189,15 @@ impl<T> AppendOnlyVec<T> {
         }
         idx
     }
+    /// Extend the vec with the contents of an iterator.
+    ///
+    /// Note: this is currently no more efficient than calling `push` for each
+    /// element of the iterator.
+    pub fn extend(&self, iter: impl IntoIterator<Item = T>) {
+        for val in iter {
+            self.push(val);
+        }
+    }
     /// Append an element to the array with exclusive access
     ///
     /// This is slightly more efficient than [`AppendOnlyVec::push`] since it
