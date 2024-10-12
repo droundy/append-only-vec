@@ -1,4 +1,4 @@
-use std::{sync::RwLock, ops::Index};
+use std::{ops::Index, sync::RwLock};
 
 use append_only_vec::AppendOnlyVec;
 use scaling::{bench, bench_scaling_gen};
@@ -10,7 +10,7 @@ struct RwVec<T> {
 impl<T: Clone> RwVec<T> {
     fn new() -> Self {
         RwVec {
-            data: RwLock::new(Vec::new())
+            data: RwLock::new(Vec::new()),
         }
     }
     fn push(&self, val: T) {
@@ -31,7 +31,7 @@ struct ParkVec<T> {
 impl<T: Clone> ParkVec<T> {
     fn new() -> Self {
         ParkVec {
-            data: parking_lot::RwLock::new(Vec::new())
+            data: parking_lot::RwLock::new(Vec::new()),
         }
     }
     fn push(&self, val: T) {
@@ -276,7 +276,7 @@ fn main() {
                     let mut sum = 0;
                     let n = vec.len();
                     for i in 0..n {
-                        sum += vec[n-1-i];
+                        sum += vec[n - 1 - i];
                     }
                     sum
                 },
@@ -297,7 +297,7 @@ fn main() {
                     let mut sum = 0;
                     let n = vec.len();
                     for i in 0..n {
-                        sum += vec.get(n-1-i);
+                        sum += vec.get(n - 1 - i);
                     }
                     sum
                 },
@@ -318,7 +318,7 @@ fn main() {
                     let mut sum = 0;
                     let n = vec.len();
                     for i in 0..n {
-                        sum += vec.get(n-1-i);
+                        sum += vec.get(n - 1 - i);
                     }
                     sum
                 },
@@ -339,7 +339,7 @@ fn main() {
                     let mut sum = 0;
                     let n = vec.len();
                     for i in 0..n {
-                        sum += vec[n-1-i];
+                        sum += vec[n - 1 - i];
                     }
                     sum
                 },

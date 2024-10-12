@@ -114,11 +114,12 @@ impl<T> AppendOnlyVec<T> {
     fn layout(&self, array: u32) -> std::alloc::Layout {
         std::alloc::Layout::array::<T>(bin_size(array)).unwrap()
     }
-    /// Append an element to the array
+    /// Internal-only function requests a slot and puts data into it.
     ///
-    /// This is notable in that it doesn't require a `&mut self`, because it
-    /// does appropriate atomic synchronization.
-    pub fn push(&self, val: T) -> usize {
+    /// However this does not update the size of the vec, which *must* be done
+    /// in order for either the value to be readable *or* for future pushes to
+    /// actually terminate.
+    fn pre_push(&self, val: T) -> usize {
         let idx = self.reserved.fetch_add(1, Ordering::Relaxed);
         let (array, offset) = indices(idx);
         let ptr = if self.len() < 1 + idx - offset {
@@ -155,6 +156,16 @@ impl<T> AppendOnlyVec<T> {
         // guaranteed to be valid because of the loop we used above, which used
         // self.len() which has Ordering::Acquire semantics.
         unsafe { (ptr.add(offset)).write(val) };
+        idx
+    }
+    /// Append an element to the array
+    ///
+    /// This is notable in that it doesn't require a `&mut self`, because it
+    /// does appropriate atomic synchronization.
+    ///
+    /// The return value is the index tha was pushed to.
+    pub fn push(&self, val: T) -> usize {
+        let idx = self.pre_push(val);
 
         // Now we need to increase the size of the vec, so it can get read.  We
         // use Release upon success, to ensure that the value which we wrote is
@@ -176,6 +187,20 @@ impl<T> AppendOnlyVec<T> {
             // unlikely.
             std::hint::spin_loop();
         }
+        idx
+    }
+    /// Append an element to the array with exclusive access
+    ///
+    /// This is slightly more efficient than [`AppendOnlyVec::push`] since it
+    /// doesn't need to worry about concurrent access.
+    ///
+    /// The return value is the new size of the array.
+    pub fn push_mut(&mut self, val: T) -> usize {
+        let idx = self.pre_push(val);
+        // We do not need synchronization here because no one else has access to
+        // this data, and if it is passed to another thread that will involve
+        // the appropriate memory barrier.
+        self.count.store(idx, Ordering::Relaxed);
         idx
     }
     const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(std::ptr::null_mut());
@@ -341,6 +366,26 @@ impl<T> IntoIterator for AppendOnlyVec<T> {
     }
 }
 
+impl<T> FromIterator<T> for AppendOnlyVec<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let out = Self::new();
+        for x in iter {
+            let idx = out.pre_push(x);
+            // We can be relaxed here because no one else has access to
+            // this data, and if it is passed to another thread that will involve
+            // the appropriate memory barrier.
+            out.count.store(idx + 1, Ordering::Relaxed);
+        }
+        out
+    }
+}
+
+impl<T> From<Vec<T>> for AppendOnlyVec<T> {
+    fn from(value: Vec<T>) -> Self {
+        value.into_iter().collect()
+    }
+}
+
 #[test]
 fn test_pushing_and_indexing() {
     let v = AppendOnlyVec::<usize>::new();
@@ -415,5 +460,13 @@ fn test_push_then_index_mut() {
     }
     for i in 0..1024 {
         assert_eq!(v[i], 2 * i);
+    }
+}
+
+#[test]
+fn test_from_vec() {
+    for v in [vec![5_i32, 4, 3, 2, 1], Vec::new(), vec![1]] {
+        let aov: AppendOnlyVec<i32> = v.clone().into();
+        assert_eq!(v, aov.into_vec());
     }
 }
