@@ -125,11 +125,21 @@ impl<T> AppendOnlyVec<T> {
         let ptr = if self.len() < 1 + idx - offset {
             // We are working on a new array, which may not have been allocated...
             if offset == 0 {
-                // It is our job to allocate the array!  The size of the array
-                // is determined in the self.layout method, which needs to be
-                // consistent with the indices function.
-                let layout = self.layout(array);
-                let ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
+                let ptr = if std::mem::size_of::<T>() == 0 {
+                    // If `T` is zero-sized type, no allocation is needed.
+                    std::ptr::NonNull::<T>::dangling().as_ptr()
+                } else {
+                    // It is our job to allocate the array!  The size of the array
+                    // is determined in the self.layout method, which needs to be
+                    // consistent with the indices function.
+                    let layout = self.layout(array);
+                    let ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
+                    if ptr.is_null() {
+                        std::alloc::handle_alloc_error(layout);
+                    }
+                    ptr
+                };
+
                 unsafe {
                     *self.data[array as usize].get() = ptr;
                 }
@@ -322,16 +332,18 @@ impl<T> Drop for AppendOnlyVec<T> {
                 std::ptr::drop_in_place(ptr.add(offset));
             }
         }
-        // Now we will free all the arrays.
-        for array in 0..self.data.len() as u32 {
-            // This load is relaxed because no other thread can have a reference
-            // to Self because we have a &mut self.
-            let ptr = unsafe { *self.data[array as usize].get() };
-            if !ptr.is_null() {
-                let layout = self.layout(array);
-                unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
-            } else {
-                break;
+        if std::mem::size_of::<T>() != 0 {
+            // Now we will free all the arrays only if `T` isn't zero-sized type.
+            for array in 0..self.data.len() as u32 {
+                // This load is relaxed because no other thread can have a reference
+                // to Self because we have a &mut self.
+                let ptr = unsafe { *self.data[array as usize].get() };
+                if !ptr.is_null() {
+                    let layout = self.layout(array);
+                    unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -410,6 +422,21 @@ fn test_pushing_and_indexing() {
     let vec: Vec<usize> = v.iter().copied().collect();
     let ve2: Vec<usize> = (0..50).collect();
     assert_eq!(vec, ve2);
+}
+
+#[test]
+fn test_pushing_and_indexing_zst() {
+    struct Zst;
+
+    let v = AppendOnlyVec::<Zst>::new();
+
+    for n in 0..50 {
+        v.push(Zst);
+        assert_eq!(v.len(), n + 1);
+        for i in 0..(n + 1) {
+            let _ = v[i];
+        }
+    }
 }
 
 #[test]
