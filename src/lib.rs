@@ -222,6 +222,7 @@ impl<T> AppendOnlyVec<T> {
         self.count.store(idx, Ordering::Relaxed);
         idx
     }
+    #[allow(clippy::declare_interior_mutable_const)]
     const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(std::ptr::null_mut());
     /// Allocate a new empty array
     pub const fn new() -> Self {
@@ -450,8 +451,8 @@ fn test_parallel_pushing() {
         threads.push(std::thread::spawn(move || {
             let which1 = v.push(thread_num);
             let which2 = v.push(thread_num);
-            assert_eq!(v[which1 as usize], thread_num);
-            assert_eq!(v[which2 as usize], thread_num);
+            assert_eq!(v[which1], thread_num);
+            assert_eq!(v[which2], thread_num);
         }));
     }
     for t in threads {
