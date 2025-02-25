@@ -193,17 +193,17 @@ impl<T> AppendOnlyVec<T> {
     ///     }
     /// 
     ///     fn get(&self, index: usize) -> &T {
-    ///         while self.len() <= index {
+    ///         while self.cache.len() <= index {
     ///             let len = self.cache.len();
     ///             self.cache.push_if_len(len, (self.compute_ith)(len));
     ///         }
-    ///         return &self[index];
+    ///         return &self.cache[index];
     ///     }
     /// }
     /// let seq = CachedSequence::new(|i| i + 1);
-    /// assert_eq!(1, seq.get(0));
-    /// assert_eq!(1, seq.get(0));
-    /// assert_eq!(2, seq.get(1)); 
+    /// assert_eq!(1, *seq.get(0));
+    /// assert_eq!(1, *seq.get(0));
+    /// assert_eq!(2, *seq.get(1)); 
     /// ```
     pub fn push_if_len(&self, expected_len: usize, val: T) -> Result<usize, T> {
         let prev_reserved = self.reserved.load(Ordering::Relaxed);
