@@ -337,6 +337,45 @@ impl<T> Drop for AppendOnlyVec<T> {
     }
 }
 
+impl<T> Clone for AppendOnlyVec<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        let len = self.len();
+        let mut data = [Self::EMPTY; BITS_USED - 1 - 3];
+        let mut remaining = len;
+        for array in 0..(BITS_USED - 1 - 3) as u32 {
+            if remaining == 0 {
+                break;
+            }
+
+            let capacity = bin_size(array);
+            let bin_len = capacity.min(remaining);
+            let src = unsafe { *self.data[array as usize].get() };
+
+            let layout = self.layout(array);
+            let dest = unsafe { std::alloc::alloc(layout) } as *mut T;
+
+            for i in 0..bin_len {
+                unsafe {
+                    dest.add(i).write((*src.add(i)).clone());
+                }
+            }
+
+            data[array as usize] = UnsafeCell::new(dest);
+
+            remaining -= bin_len;
+        }
+
+        Self {
+            count: AtomicUsize::new(len),
+            reserved: AtomicUsize::new(len),
+            data,
+        }
+    }
+}
+
 /// An `Iterator` for the values contained in the `AppendOnlyVec`
 #[derive(Debug)]
 pub struct IntoIter<T>(std::vec::IntoIter<T>);
@@ -477,5 +516,17 @@ fn test_from_vec() {
     for v in [vec![5_i32, 4, 3, 2, 1], Vec::new(), vec![1]] {
         let aov: AppendOnlyVec<i32> = v.clone().into();
         assert_eq!(v, aov.into_vec());
+    }
+}
+
+#[test]
+fn test_clone() {
+    let v = AppendOnlyVec::<String>::new();
+    for i in 0..1024 {
+        v.push(format!("{}", i));
+    }
+    let v2 = v.clone();
+    for i in 0..1024 {
+        assert_eq!(v[i], v2[i]);
     }
 }
