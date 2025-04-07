@@ -344,16 +344,20 @@ where
     fn clone(&self) -> Self {
         let len = self.len();
         let mut data = [Self::EMPTY; BITS_USED - 1 - 3];
+        // Elements remaining to clone
         let mut remaining = len;
+
         for array in 0..(BITS_USED - 1 - 3) as u32 {
             if remaining == 0 {
                 break;
             }
 
             let capacity = bin_size(array);
+            // How many elements in this bin to actually clone?
             let bin_len = capacity.min(remaining);
             let src = unsafe { *self.data[array as usize].get() };
 
+            // Allocate destination bin
             let layout = self.layout(array);
             let dest = unsafe { std::alloc::alloc(layout) } as *mut T;
 
@@ -526,6 +530,8 @@ fn test_clone() {
         v.push(format!("{}", i));
     }
     let v2 = v.clone();
+
+    assert_eq!(v.len(), v2.len());
     for i in 0..1024 {
         assert_eq!(v[i], v2[i]);
     }
