@@ -342,41 +342,8 @@ where
     T: Clone,
 {
     fn clone(&self) -> Self {
-        let len = self.len();
-        let mut data = [Self::EMPTY; BITS_USED - 1 - 3];
-        // Elements remaining to clone
-        let mut remaining = len;
-
-        for array in 0..(BITS_USED - 1 - 3) as u32 {
-            if remaining == 0 {
-                break;
-            }
-
-            let capacity = bin_size(array);
-            // How many elements in this bin to actually clone?
-            let bin_len = capacity.min(remaining);
-            let src = unsafe { *self.data[array as usize].get() };
-
-            // Allocate destination bin
-            let layout = self.layout(array);
-            let dest = unsafe { std::alloc::alloc(layout) } as *mut T;
-
-            for i in 0..bin_len {
-                unsafe {
-                    dest.add(i).write((*src.add(i)).clone());
-                }
-            }
-
-            data[array as usize] = UnsafeCell::new(dest);
-
-            remaining -= bin_len;
-        }
-
-        Self {
-            count: AtomicUsize::new(len),
-            reserved: AtomicUsize::new(len),
-            data,
-        }
+        // FIXME this could be optimized to avoid reloading pointers.
+        self.iter().cloned().collect()
     }
 }
 
