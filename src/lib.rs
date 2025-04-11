@@ -337,6 +337,16 @@ impl<T> Drop for AppendOnlyVec<T> {
     }
 }
 
+impl<T> Clone for AppendOnlyVec<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        // FIXME this could be optimized to avoid reloading pointers.
+        self.iter().cloned().collect()
+    }
+}
+
 /// An `Iterator` for the values contained in the `AppendOnlyVec`
 #[derive(Debug)]
 pub struct IntoIter<T>(std::vec::IntoIter<T>);
@@ -477,5 +487,19 @@ fn test_from_vec() {
     for v in [vec![5_i32, 4, 3, 2, 1], Vec::new(), vec![1]] {
         let aov: AppendOnlyVec<i32> = v.clone().into();
         assert_eq!(v, aov.into_vec());
+    }
+}
+
+#[test]
+fn test_clone() {
+    let v = AppendOnlyVec::<String>::new();
+    for i in 0..1024 {
+        v.push(format!("{}", i));
+    }
+    let v2 = v.clone();
+
+    assert_eq!(v.len(), v2.len());
+    for i in 0..1024 {
+        assert_eq!(v[i], v2[i]);
     }
 }
