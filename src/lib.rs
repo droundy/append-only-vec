@@ -99,6 +99,9 @@ impl<T> Default for AppendOnlyVec<T> {
 
 impl<T> AppendOnlyVec<T> {
     /// Return an `Iterator` over the elements of the vec.
+    /// 
+    /// Note that any elements pushed to the vector after `iter()` was
+    /// called won't be returned by the iterator.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
         // FIXME this could be written to be a little more efficient probably,
         // if we made it read each pointer only once.  On the other hand, that
@@ -117,7 +120,7 @@ impl<T> AppendOnlyVec<T> {
     /// Internal-only function either allocates data for a given index,
     /// or waits until another thread allocated this data. Requires that
     /// idx has been reserved, and no other thread will try to write to
-    /// this specific index.
+    /// this specific index, otherwise it will cause UB.
     /// 
     /// This returns the pointer to the allocated slot, without initializing
     /// it. The initialization as well as adjusting the size of the vec must
@@ -171,9 +174,23 @@ impl<T> AppendOnlyVec<T> {
         unsafe { ptr.write(val) };
         idx
     }
-    /// Atomically appends an element to the array if its length is equal
-    /// to the given length. Otherwise, leaves the array untouched and returns
-    /// [`Result::Err`].
+    // Computes a value from its index to push into the vec.
+    ///
+    /// The function will be called on `index` where `index` is the
+    /// current length of the vector. If the function returns `Some(value)`, it
+    /// is guaranteed that value will be written to the `index`-th entry of the
+    /// vector. If the function returns `None` then the `AppendOnlyVec` remains 
+    /// unchanged.  `compute_next()` will return `Some(index)` if a value was
+    /// pushed at this index, and `None` if the vector remained unchanged.
+    /// 
+    /// Note that the given function may be called multiple times, in a compare-exchange
+    /// loop. In particular, the longer the function runs, the more likely it is
+    /// that the contents of the vector have changed in the meantime, and it has to
+    /// be called again. Thus, for best performance, it is recommended to only use
+    /// `compute_next()` when the function is very cheap to compute. If this is not
+    /// the case, it may be faster to use a `RwLock<AppendOnlyVec<T>>` instead.
+    /// 
+    /// # Example
     /// 
     /// A common use case is when added elements depend on their index, for example
     /// when lazily computing a sequence of elements:
@@ -195,7 +212,7 @@ impl<T> AppendOnlyVec<T> {
     ///     fn get(&self, index: usize) -> &T {
     ///         while self.cache.len() <= index {
     ///             let len = self.cache.len();
-    ///             self.cache.push_if_len(len, (self.compute_ith)(len));
+    ///             self.cache.compute_next(|i| Some((self.compute_ith)(i)));
     ///         }
     ///         return &self.cache[index];
     ///     }
@@ -205,38 +222,43 @@ impl<T> AppendOnlyVec<T> {
     /// assert_eq!(1, *seq.get(0));
     /// assert_eq!(2, *seq.get(1)); 
     /// ```
-    pub fn push_if_len(&self, expected_len: usize, val: T) -> Result<usize, T> {
-        let prev_reserved = self.reserved.load(Ordering::Relaxed);
-        if prev_reserved == expected_len {
-            if self.reserved.compare_exchange(prev_reserved, prev_reserved + 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
-                let idx = prev_reserved;
-
-                // we may call ensure_slot_allocated since we got idx from compare_exchange
-                // in a way that ensures that the same value is never returned twice 
-                let ptr = unsafe { self.ensure_slot_allocated(idx) };
-                unsafe { ptr.write(val) };
-
-                // Now we need to increase the size of the vec, so it can get read. 
-                // We do this exactly as in push, see that for explanations
-                while self
-                    .count
-                    .compare_exchange(idx, idx + 1, Ordering::Release, Ordering::Relaxed)
-                    .is_err()
-                {
-                    std::hint::spin_loop();
+    pub fn compute_next(&self, mut f: impl FnMut(usize) -> Option<T>) -> Option<usize> {
+        let mut current_reserved = self.reserved.load(Ordering::Relaxed);
+        while let Some(value) = f(current_reserved) {
+            // as in `push`, we assume now overflow happens; in practice, this
+            // is justified, since memory will run out before we reach the limit
+            // of `usize`
+            let new_reserved = current_reserved + 1;
+            match self.reserved.compare_exchange(current_reserved, new_reserved, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => {
+                    let idx = current_reserved;
+                    // we may call ensure_slot_allocated since we got idx
+                    // from compare_exchange above, which will never return two times
+                    // the same index 
+                    let ptr = unsafe { self.ensure_slot_allocated(idx) };
+                    // The contents of this offset are guaranteed to be unused (so far)
+                    // because we got the idx from our fetch_add above, and ptr is
+                    // guaranteed to be valid because of ensure_slot_allocated
+                    unsafe { ptr.write(value) };
+                    
+                    // Now we need to increase the size of the vec, so it can get read. 
+                    // We do this exactly as in push, see that for explanations
+                    while self
+                        .count
+                        .compare_exchange(idx, idx + 1, Ordering::Release, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        std::hint::spin_loop();
+                    }
+                    return Some(idx);
+                },
+                Err(read_value) => {
+                    // another thread reserved an entry in the meantime, try again
+                    current_reserved = read_value;
                 }
-                Ok(idx)
-            } else {
-                // in this case, someone else reserved the slot already; since reserved
-                // only ever increases, this means we don't have to try again, as we will
-                // never be able to write to the expected_len-th index
-                Err(val)
             }
-        } else {
-            // at the point in time when prev_reserved was loaded, we may assume 
-            // `self.len() != expected_len`, thus abort here
-            Err(val)
         }
+        return None;
     }
     /// Append an element to the array
     ///
@@ -524,14 +546,10 @@ fn test_parallel_pushing_len_restriction() {
     for thread_num in 0..N {
         let v = v.clone();
         threads.push(std::thread::spawn(move || {
-            loop {
-                let len = v.len();
-                let value = ((len as u64) << 32) | (thread_num as u64);
-                if let Ok(i) = v.push_if_len(len, value) {
-                    assert_eq!(v[i], value);
-                    break;
-                }
-            }
+            let index = v.compute_next(|i| Some(((i as u64) << 32) | (thread_num as u64)));
+            assert!(index.is_some());
+            let expected = ((index.unwrap() as u64) << 32) | (thread_num as u64);
+            assert_eq!(v[index.unwrap()], expected);
         }));
     }
     for t in threads {
