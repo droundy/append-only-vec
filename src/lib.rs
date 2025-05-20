@@ -209,7 +209,7 @@ impl<T> AppendOnlyVec<T> {
         // We do not need synchronization here because no one else has access to
         // this data, and if it is passed to another thread that will involve
         // the appropriate memory barrier.
-        self.count.store(idx, Ordering::Relaxed);
+        self.count.store(idx + 1, Ordering::Relaxed);
         idx
     }
     const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(std::ptr::null_mut());
@@ -502,4 +502,13 @@ fn test_clone() {
     for i in 0..1024 {
         assert_eq!(v[i], v2[i]);
     }
+}
+
+#[test]
+fn test_push_mut() {
+    let mut v = AppendOnlyVec::new();
+    for i in 0..1024 {
+        v.push_mut(format!("{}", i));
+    }
+    assert_eq!(v.len(), 1024);
 }
