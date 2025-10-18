@@ -72,6 +72,23 @@ const fn bin_size(array: u32) -> usize {
     (1 << 3) << array
 }
 
+fn spin_wait(failures: &mut usize) {
+    *failures += 1;
+    if *failures <= 3 {
+        // If there haven't been many failures yet, then we optimistically
+        // spinloop.
+        for _ in 0..(1 << *failures) {
+            std::hint::spin_loop();
+        }
+    } else {
+        // If there have been many failures, then continuing to spinloop will
+        // probably just waste CPU, and whoever we are waiting for has been
+        // preempted then spinning could actively delay completion of the task.
+        // So instead, we cooperatively yield to the OS scheduler.
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn test_indices() {
     for i in 0..32 {
@@ -136,8 +153,9 @@ impl<T> AppendOnlyVec<T> {
                 ptr
             } else {
                 // We need to wait for the array to be allocated.
+                let mut failures = 0;
                 while self.len() < 1 + idx - offset {
-                    std::hint::spin_loop();
+                    spin_wait(&mut failures);
                 }
                 // The Ordering::Acquire semantics of self.len() ensures that
                 // this pointer read will get the non-null pointer allocated
@@ -172,6 +190,7 @@ impl<T> AppendOnlyVec<T> {
         // visible to any thread that has confirmed that the count is big enough
         // to read that element.  In case of failure, we can be relaxed, since
         // we don't do anything with the result other than try again.
+        let mut failures = 0;
         while self
             .count
             .compare_exchange(idx, idx + 1, Ordering::Release, Ordering::Relaxed)
@@ -179,13 +198,8 @@ impl<T> AppendOnlyVec<T> {
         {
             // This means that someone else *started* pushing before we started,
             // but hasn't yet finished.  We have to wait for them to finish
-            // pushing before we can update the count.  Note that using a
-            // spinloop here isn't really ideal, but except when allocating a
-            // new array, the window between reserving space and using it is
-            // pretty small, so contention will hopefully be rare, and having a
-            // context switch during that interval will hopefully be vanishingly
-            // unlikely.
-            std::hint::spin_loop();
+            // pushing before we can update the count.
+            spin_wait(&mut failures);
         }
         idx
     }
