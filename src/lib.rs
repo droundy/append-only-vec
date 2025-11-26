@@ -116,6 +116,9 @@ impl<T> Default for AppendOnlyVec<T> {
 
 impl<T> AppendOnlyVec<T> {
     /// Return an `Iterator` over the elements of the vec.
+    /// 
+    /// Note that any elements pushed to the vector after `iter()` was
+    /// called won't be returned by the iterator.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
         // FIXME this could be written to be a little more efficient probably,
         // if we made it read each pointer only once.  On the other hand, that
@@ -131,18 +134,20 @@ impl<T> AppendOnlyVec<T> {
     fn layout(&self, array: u32) -> std::alloc::Layout {
         std::alloc::Layout::array::<T>(bin_size(array)).unwrap()
     }
-    /// Internal-only function requests a slot and puts data into it.
-    ///
-    /// However this does not update the size of the vec, which *must* be done
-    /// in order for either the value to be readable *or* for future pushes to
-    /// actually terminate.
-    fn pre_push(&self, val: T) -> usize {
-        let idx = self.reserved.fetch_add(1, Ordering::Relaxed);
+    /// Internal-only function either allocates data for a given index,
+    /// or waits until another thread allocated this data. Requires that
+    /// idx has been reserved, and no other thread will try to write to
+    /// this specific index, otherwise it will cause UB.
+    /// 
+    /// This returns the pointer to the allocated slot, without initializing
+    /// it. The initialization as well as adjusting the size of the vec must
+    /// be done by the caller.
+    unsafe fn ensure_slot_allocated(&self, idx: usize) -> *mut T {
         let (array, offset) = indices(idx);
         let ptr = if self.len() < 1 + idx - offset {
             // We are working on a new array, which may not have been allocated...
             if offset == 0 {
-                // It is our job to allocate the array!  The size of the array
+                // It is our job to allocate the array! The size of the array
                 // is determined in the self.layout method, which needs to be
                 // consistent with the indices function.
                 let layout = self.layout(array);
@@ -168,13 +173,110 @@ impl<T> AppendOnlyVec<T> {
             // above.
             unsafe { *self.data[array as usize].get() }
         };
-
+        return unsafe { ptr.add(offset) };
+    }
+    /// Internal-only function requests a slot and puts data into it.
+    ///
+    /// However this does not update the size of the vec, which *must* be done
+    /// in order for either the value to be readable *or* for future pushes to
+    /// actually terminate.
+    fn pre_push(&self, val: T) -> usize {
+        let idx = self.reserved.fetch_add(1, Ordering::Relaxed);
+        // we may call ensure_slot_allocated since we got idx
+        // from fetch_add above, which will never return two times
+        // the same index 
+        let ptr = unsafe { self.ensure_slot_allocated(idx) };
         // The contents of this offset are guaranteed to be unused (so far)
         // because we got the idx from our fetch_add above, and ptr is
-        // guaranteed to be valid because of the loop we used above, which used
-        // self.len() which has Ordering::Acquire semantics.
-        unsafe { (ptr.add(offset)).write(val) };
+        // guaranteed to be valid because of ensure_slot_allocated
+        unsafe { ptr.write(val) };
         idx
+    }
+    // Computes a value from its index to push into the vec.
+    ///
+    /// The function will be called on `index` where `index` is the
+    /// current length of the vector. If the function returns `Some(value)`, it
+    /// is guaranteed that value will be written to the `index`-th entry of the
+    /// vector. If the function returns `None` then the `AppendOnlyVec` remains 
+    /// unchanged.  `compute_next()` will return `Some(index)` if a value was
+    /// pushed at this index, and `None` if the vector remained unchanged.
+    /// 
+    /// Note that the given function may be called multiple times, in a compare-exchange
+    /// loop. In particular, the longer the function runs, the more likely it is
+    /// that the contents of the vector have changed in the meantime, and it has to
+    /// be called again. Thus, for best performance, it is recommended to only use
+    /// `compute_next()` when the function is very cheap to compute. If this is not
+    /// the case, it may be faster to use a `RwLock<AppendOnlyVec<T>>` instead.
+    /// 
+    /// # Example
+    /// 
+    /// A common use case is when added elements depend on their index, for example
+    /// when lazily computing a sequence of elements:
+    /// ```
+    /// # use append_only_vec::*;
+    /// struct CachedSequence<F, T>
+    ///     where F: Fn(usize) -> T
+    /// {
+    ///     compute_ith: F,
+    ///     cache: AppendOnlyVec<T>
+    /// }
+    /// impl<F, T> CachedSequence<F, T>
+    ///     where F: Fn(usize) -> T
+    /// {
+    ///     fn new(compute_ith: F) -> Self {
+    ///         CachedSequence { compute_ith: compute_ith, cache: AppendOnlyVec::new() }
+    ///     }
+    /// 
+    ///     fn get(&self, index: usize) -> &T {
+    ///         while self.cache.len() <= index {
+    ///             let len = self.cache.len();
+    ///             self.cache.compute_next(|i| Some((self.compute_ith)(i)));
+    ///         }
+    ///         return &self.cache[index];
+    ///     }
+    /// }
+    /// let seq = CachedSequence::new(|i| i + 1);
+    /// assert_eq!(1, *seq.get(0));
+    /// assert_eq!(1, *seq.get(0));
+    /// assert_eq!(2, *seq.get(1)); 
+    /// ```
+    pub fn compute_next(&self, mut f: impl FnMut(usize) -> Option<T>) -> Option<usize> {
+        let mut current_reserved = self.reserved.load(Ordering::Relaxed);
+        while let Some(value) = f(current_reserved) {
+            // as in `push`, we assume now overflow happens; in practice, this
+            // is justified, since memory will run out before we reach the limit
+            // of `usize`
+            let new_reserved = current_reserved + 1;
+            match self.reserved.compare_exchange(current_reserved, new_reserved, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => {
+                    let idx = current_reserved;
+                    // we may call ensure_slot_allocated since we got idx
+                    // from compare_exchange above, which will never return two times
+                    // the same index 
+                    let ptr = unsafe { self.ensure_slot_allocated(idx) };
+                    // The contents of this offset are guaranteed to be unused (so far)
+                    // because we got the idx from our fetch_add above, and ptr is
+                    // guaranteed to be valid because of ensure_slot_allocated
+                    unsafe { ptr.write(value) };
+                    
+                    // Now we need to increase the size of the vec, so it can get read. 
+                    // We do this exactly as in push, see that for explanations
+                    while self
+                        .count
+                        .compare_exchange(idx, idx + 1, Ordering::Release, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        std::hint::spin_loop();
+                    }
+                    return Some(idx);
+                },
+                Err(read_value) => {
+                    // another thread reserved an entry in the meantime, try again
+                    current_reserved = read_value;
+                }
+            }
+        }
+        return None;
     }
     /// Append an element to the array
     ///
@@ -456,6 +558,33 @@ fn test_parallel_pushing() {
     }
     for thread_num in 0..N {
         assert_eq!(2, v.iter().copied().filter(|&x| x == thread_num).count());
+    }
+}
+
+#[test]
+fn test_parallel_pushing_len_restriction() {
+    use std::sync::Arc;
+    let v = Arc::new(AppendOnlyVec::<u64>::new());
+    let mut threads = Vec::new();
+    const N: u64 = 100;
+    for thread_num in 0..N {
+        let v = v.clone();
+        threads.push(std::thread::spawn(move || {
+            let index = v.compute_next(|i| Some(((i as u64) << 32) | (thread_num as u64)));
+            assert!(index.is_some());
+            let expected = ((index.unwrap() as u64) << 32) | (thread_num as u64);
+            assert_eq!(v[index.unwrap()], expected);
+        }));
+    }
+    for t in threads {
+        t.join().ok();
+    }
+    assert_eq!(N, v.len() as u64);
+    for i in 0..N {
+        assert_eq!(i, v[i as usize] >> 32);
+    }
+    for thread_num in 0..N {
+        assert_eq!(1, v.iter().copied().filter(|&x| x & ((1 << 32) - 1) == thread_num).count());
     }
 }
 
