@@ -33,11 +33,38 @@
 //! }
 //! assert_eq!(V.len(), 1000);
 //! ```
+//!
+//! ### `no_std`
+//!
+//! This crate needs only `core` and `alloc`.  The `std` feature, which is on by
+//! default, lets a thread that has waited a long time for another to finish a
+//! push yield to the operating system instead of continuing to spin; without
+//! it (`default-features = false`) the crate is `no_std` and always spins.
+//! If you turn off default features on a platform that does have `std`, turn
+//! `std` back on to keep that behavior.
+//!
+//! Without `std`, a push that finds another push unfinished spins until it
+//! completes.  So never push from an interrupt handler, or from a task that
+//! can preempt another task's push without letting it run, to a vec that the
+//! interrupted code also pushes to: the handler would spin forever.
+//!
+//! On targets without atomic compare-and-swap (such as `thumbv6m-none-eabi`),
+//! the `portable-atomic` feature uses the `portable-atomic` crate's atomics
+//! instead of `core`'s.  As that crate explains, such targets also need one of
+//! its features that says how to provide them (for instance `critical-section`).
 
-use std::cell::UnsafeCell;
-use std::ops::{Index, IndexMut};
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::ops::{Index, IndexMut};
+#[cfg(not(feature = "portable-atomic"))]
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+#[cfg(feature = "portable-atomic")]
+use portable_atomic::AtomicUsize;
 pub struct AppendOnlyVec<T> {
     count: AtomicUsize,
     reserved: AtomicUsize,
@@ -47,7 +74,7 @@ pub struct AppendOnlyVec<T> {
 unsafe impl<T: Send> Send for AppendOnlyVec<T> {}
 unsafe impl<T: Sync + Send> Sync for AppendOnlyVec<T> {}
 
-const BITS: usize = std::mem::size_of::<usize>() * 8;
+const BITS: usize = core::mem::size_of::<usize>() * 8;
 
 #[cfg(target_arch = "x86_64")]
 const BITS_USED: usize = 48;
@@ -55,6 +82,8 @@ const BITS_USED: usize = 48;
 const BITS_USED: usize = 64;
 #[cfg(target_pointer_width = "32")]
 const BITS_USED: usize = 32;
+#[cfg(target_pointer_width = "16")]
+const BITS_USED: usize = 16;
 
 // This takes an index into a vec, and determines which data array will hold it
 // (the first return value), and what the index will be into that data array
@@ -72,13 +101,15 @@ const fn bin_size(array: u32) -> usize {
     (1 << 3) << array
 }
 
+#[cfg(feature = "std")]
 fn spin_wait(failures: &mut usize) {
-    *failures += 1;
+    // Saturate, since a long enough wait would overflow a 32-bit counter.
+    *failures = failures.saturating_add(1);
     if *failures <= 3 {
         // If there haven't been many failures yet, then we optimistically
         // spinloop.
         for _ in 0..(1 << *failures) {
-            std::hint::spin_loop();
+            core::hint::spin_loop();
         }
     } else {
         // If there have been many failures, then continuing to spinloop will
@@ -86,6 +117,16 @@ fn spin_wait(failures: &mut usize) {
         // preempted then spinning could actively delay completion of the task.
         // So instead, we cooperatively yield to the OS scheduler.
         std::thread::yield_now();
+    }
+}
+
+/// Without `std` there is no scheduler to yield to, so we always spin, backing
+/// off up to 8 spins per call.
+#[cfg(not(feature = "std"))]
+fn spin_wait(failures: &mut usize) {
+    *failures = (*failures + 1).min(3);
+    for _ in 0..(1 << *failures) {
+        core::hint::spin_loop();
     }
 }
 
@@ -128,8 +169,8 @@ impl<T> AppendOnlyVec<T> {
         self.count.load(Ordering::Acquire)
     }
 
-    fn layout(&self, array: u32) -> std::alloc::Layout {
-        std::alloc::Layout::array::<T>(bin_size(array)).unwrap()
+    fn layout(&self, array: u32) -> alloc::alloc::Layout {
+        alloc::alloc::Layout::array::<T>(bin_size(array)).unwrap()
     }
     /// Internal-only function requests a slot and puts data into it.
     ///
@@ -149,11 +190,11 @@ impl<T> AppendOnlyVec<T> {
                 let ptr = if layout.size() == 0 {
                     // Zero-sized types need no memory, and allocating a
                     // zero-sized layout is undefined behavior.
-                    std::ptr::NonNull::<T>::dangling().as_ptr()
+                    core::ptr::NonNull::<T>::dangling().as_ptr()
                 } else {
-                    let ptr = unsafe { std::alloc::alloc(layout) } as *mut T;
+                    let ptr = unsafe { alloc::alloc::alloc(layout) } as *mut T;
                     if ptr.is_null() {
-                        std::alloc::handle_alloc_error(layout);
+                        alloc::alloc::handle_alloc_error(layout);
                     }
                     ptr
                 };
@@ -236,7 +277,7 @@ impl<T> AppendOnlyVec<T> {
         self.count.store(idx + 1, Ordering::Relaxed);
         idx
     }
-    const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(std::ptr::null_mut());
+    const EMPTY: UnsafeCell<*mut T> = UnsafeCell::new(core::ptr::null_mut());
     /// Allocate a new empty array
     pub const fn new() -> Self {
         AppendOnlyVec {
@@ -291,11 +332,11 @@ impl<T> AppendOnlyVec<T> {
         vec
     }
 }
-impl<T> std::fmt::Debug for AppendOnlyVec<T>
+impl<T> core::fmt::Debug for AppendOnlyVec<T>
 where
-    T: std::fmt::Debug,
+    T: core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
     }
 }
@@ -343,7 +384,7 @@ impl<T> Drop for AppendOnlyVec<T> {
             // with the write in `self.push`.
             let ptr = unsafe { *self.data[array as usize].get() };
             unsafe {
-                std::ptr::drop_in_place(ptr.add(offset));
+                core::ptr::drop_in_place(ptr.add(offset));
             }
         }
         // Now we will free all the arrays.
@@ -355,7 +396,7 @@ impl<T> Drop for AppendOnlyVec<T> {
                 let layout = self.layout(array);
                 // Zero-sized types were never allocated (see `pre_push`).
                 if layout.size() != 0 {
-                    unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+                    unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
                 }
             } else {
                 break;
@@ -376,7 +417,7 @@ where
 
 /// An `Iterator` for the values contained in the `AppendOnlyVec`
 #[derive(Debug)]
-pub struct IntoIter<T>(std::vec::IntoIter<T>);
+pub struct IntoIter<T>(alloc::vec::IntoIter<T>);
 
 impl<T> Iterator for IntoIter<T> {
     type Item = T;

@@ -50,6 +50,28 @@ jobs:
         with:
           command: test
           args: --all-features
+  no_std:
+    name: Check without std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "x86_64-unknown-none, thumbv6m-none-eabi"
+      - run: cargo check --no-default-features --target x86_64-unknown-none
+      - run: cargo check --no-default-features --target thumbv6m-none-eabi --features portable-atomic,portable-atomic/critical-section
+      - run: cargo test --no-default-features
+      - run: cargo test --no-default-features --features portable-atomic
+  sixteen_bit:
+    name: Check on a 16-bit target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # msp430-none-elf is a tier 3 target, so core must be built from source.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: cargo check -Zbuild-std=core,alloc --no-default-features --target msp430-none-elf --features portable-atomic
   # docsrs:
   #   name: Generate docs.rs
   #   runs-on: ubuntu-latest
@@ -85,9 +107,11 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.rust }}
           override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
+      # Only the library is checked: the dev-dependencies used by the tests
+      # and benchmarks need a newer compiler.
+      - run: cargo check
+      - run: cargo check --all-features
+      - run: cargo check --no-default-features
   miri-test:
       runs-on: ubuntu-latest
       strategy:
