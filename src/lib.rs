@@ -40,6 +40,13 @@
 //! default, lets a thread that has waited a long time for another to finish a
 //! push yield to the operating system instead of continuing to spin; without
 //! it (`default-features = false`) the crate is `no_std` and always spins.
+//! If you turn off default features on a platform that does have `std`, turn
+//! `std` back on to keep that behavior.
+//!
+//! Without `std`, a push that finds another push unfinished spins until it
+//! completes.  So never push from an interrupt handler, or from a task that
+//! can preempt another task's push without letting it run, to a vec that the
+//! interrupted code also pushes to: the handler would spin forever.
 //!
 //! On targets without atomic compare-and-swap (such as `thumbv6m-none-eabi`),
 //! the `portable-atomic` feature uses the `portable-atomic` crate's atomics
@@ -75,6 +82,8 @@ const BITS_USED: usize = 48;
 const BITS_USED: usize = 64;
 #[cfg(target_pointer_width = "32")]
 const BITS_USED: usize = 32;
+#[cfg(target_pointer_width = "16")]
+const BITS_USED: usize = 16;
 
 // This takes an index into a vec, and determines which data array will hold it
 // (the first return value), and what the index will be into that data array
@@ -93,7 +102,8 @@ const fn bin_size(array: u32) -> usize {
 }
 
 fn spin_wait(failures: &mut usize) {
-    *failures += 1;
+    // Saturate, since a long enough wait would overflow a 32-bit counter.
+    *failures = failures.saturating_add(1);
     if *failures <= 3 || cfg!(not(feature = "std")) {
         // If there haven't been many failures yet, then we optimistically
         // spinloop.  Without `std` there is no scheduler to yield to, so we
