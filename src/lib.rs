@@ -101,14 +101,14 @@ const fn bin_size(array: u32) -> usize {
     (1 << 3) << array
 }
 
+#[cfg(feature = "std")]
 fn spin_wait(failures: &mut usize) {
     // Saturate, since a long enough wait would overflow a 32-bit counter.
     *failures = failures.saturating_add(1);
-    if *failures <= 3 || cfg!(not(feature = "std")) {
+    if *failures <= 3 {
         // If there haven't been many failures yet, then we optimistically
-        // spinloop.  Without `std` there is no scheduler to yield to, so we
-        // always spin.
-        for _ in 0..(1 << (*failures).min(3)) {
+        // spinloop.
+        for _ in 0..(1 << *failures) {
             core::hint::spin_loop();
         }
     } else {
@@ -116,8 +116,17 @@ fn spin_wait(failures: &mut usize) {
         // probably just waste CPU, and whoever we are waiting for has been
         // preempted then spinning could actively delay completion of the task.
         // So instead, we cooperatively yield to the OS scheduler.
-        #[cfg(feature = "std")]
         std::thread::yield_now();
+    }
+}
+
+/// Without `std` there is no scheduler to yield to, so we always spin, backing
+/// off up to 8 spins per call.
+#[cfg(not(feature = "std"))]
+fn spin_wait(failures: &mut usize) {
+    *failures = (*failures + 1).min(3);
+    for _ in 0..(1 << *failures) {
+        core::hint::spin_loop();
     }
 }
 
