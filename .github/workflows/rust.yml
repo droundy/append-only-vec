@@ -50,6 +50,16 @@ jobs:
         with:
           command: test
           args: --all-features
+  no_std:
+    name: Check without std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "x86_64-unknown-none, thumbv6m-none-eabi"
+      - run: cargo check --no-default-features --target x86_64-unknown-none
+      - run: cargo check --no-default-features --target thumbv6m-none-eabi --features portable-atomic,portable-atomic/critical-section
   # docsrs:
   #   name: Generate docs.rs
   #   runs-on: ubuntu-latest

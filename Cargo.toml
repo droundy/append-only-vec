@@ -14,7 +14,16 @@ categories = ["data-structures", "concurrency"]
 keywords = ["frozen", "data-structure"]
 
 
+[features]
+default = ["std"]
+# Yield to the operating system when a push has waited a long time for
+# another.  Without it the crate is `no_std` (it still needs `alloc`).
+std = []
+
 [dependencies]
+# The `portable-atomic` feature: use that crate's atomics, for targets that
+# lack compare-and-swap.
+portable-atomic = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
 
