@@ -187,7 +187,17 @@ impl<T> AppendOnlyVec<T> {
                 // is determined in the self.layout method, which needs to be
                 // consistent with the indices function.
                 let layout = self.layout(array);
-                let ptr = unsafe { alloc::alloc::alloc(layout) } as *mut T;
+                let ptr = if layout.size() == 0 {
+                    // Zero-sized types need no memory, and allocating a
+                    // zero-sized layout is undefined behavior.
+                    core::ptr::NonNull::<T>::dangling().as_ptr()
+                } else {
+                    let ptr = unsafe { alloc::alloc::alloc(layout) } as *mut T;
+                    if ptr.is_null() {
+                        alloc::alloc::handle_alloc_error(layout);
+                    }
+                    ptr
+                };
                 unsafe {
                     *self.data[array as usize].get() = ptr;
                 }
@@ -384,7 +394,10 @@ impl<T> Drop for AppendOnlyVec<T> {
             let ptr = unsafe { *self.data[array as usize].get() };
             if !ptr.is_null() {
                 let layout = self.layout(array);
-                unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
+                // Zero-sized types were never allocated (see `pre_push`).
+                if layout.size() != 0 {
+                    unsafe { alloc::alloc::dealloc(ptr as *mut u8, layout) };
+                }
             } else {
                 break;
             }
@@ -566,4 +579,15 @@ fn test_push_mut() {
         v.push_mut(format!("{}", i));
     }
     assert_eq!(v.len(), 1024);
+}
+
+#[test]
+fn test_zero_sized() {
+    let v = AppendOnlyVec::<()>::new();
+    for _ in 0..1024 {
+        v.push(());
+    }
+    assert_eq!(v.len(), 1024);
+    assert_eq!(v.iter().count(), 1024);
+    assert_eq!(v.into_vec().len(), 1024);
 }
