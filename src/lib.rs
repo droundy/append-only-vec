@@ -76,10 +76,10 @@ unsafe impl<T: Sync + Send> Sync for AppendOnlyVec<T> {}
 
 const BITS: usize = core::mem::size_of::<usize>() * 8;
 
-#[cfg(target_arch = "x86_64")]
-const BITS_USED: usize = 48;
 #[cfg(all(not(target_arch = "x86_64"), target_pointer_width = "64"))]
 const BITS_USED: usize = 64;
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+const BITS_USED: usize = 48;
 #[cfg(target_pointer_width = "32")]
 const BITS_USED: usize = 32;
 #[cfg(target_pointer_width = "16")]

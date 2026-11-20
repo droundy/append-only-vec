@@ -4,4 +4,4 @@
 
 **Note:  currently there are frequent CI failures above, which are simply due to failure to install miri to run the test.  The tests do pass when run locally.**
 
-This crate defines a single data simple structure, which is a vector to which you can only append data.  It allows you to push new data values even when there are outstanding references to elements of the `AppendOnlyVec`.  Reading from a `AppendOnlyVec` is much faster than if it had been protected by a `std::sync::RwLock`.
+This crate defines a single, simple data structure, which is a vector to which you can only append data.  It allows you to push new data values even when there are outstanding references to elements of the `AppendOnlyVec`.  Reading from a `AppendOnlyVec` is much faster than if it had been protected by a `std::sync::RwLock`.
